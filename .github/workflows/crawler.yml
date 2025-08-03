@@ -1,0 +1,57 @@
+name: GitHub Stars Crawler
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  crawl-stars:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:13
+        env:
+          POSTGRES_DB: github
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password
+        ports: [5432:5432]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Wait for PostgreSQL to be ready
+        run: sleep 15
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Set up schema
+        run: |
+          PGPASSWORD=password psql -h localhost -U postgres -d github -f schema.sql
+
+      - name: Run GitHub stars crawler
+        run: python main.py
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Export CSV
+        run: |
+          PGPASSWORD=password psql -h localhost -U postgres -d github -c "\COPY repositories TO 'repos.csv' CSV HEADER"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: github-repo-stars
+          path: repos.csv
