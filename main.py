@@ -2,13 +2,12 @@ import os
 import requests
 import psycopg2
 import time
-from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
+# Get token from GitHub Actions securely
+TOKEN = os.environ.get("GITHUB_TOKEN")
+if not TOKEN:
+    raise Exception("GITHUB_TOKEN not found in environment!")
 
-# Use GITHUB_TOKEN from GitHub Actions or fallback to GITHUB_API from .env
-TOKEN = os.environ.get("GITHUB_TOKEN") or os.environ.get("GITHUB_API")
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 GITHUB_API = "https://api.github.com/graphql"
 
