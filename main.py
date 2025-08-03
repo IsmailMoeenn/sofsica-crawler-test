@@ -47,31 +47,54 @@ def build_query(cursor_token=None):
 def crawl():
     cursor_token = None
     total = 0
-    while total < 100000:
-        response = requests.post(GITHUB_API, json=build_query(cursor_token), headers=HEADERS)
-        if response.status_code != 200:
-            print("Error or rate limit:", response.text)
-            time.sleep(60)
-            continue
+    seen_repo_ids = set()
 
-        data = response.json()["data"]["search"]
-        for repo in data["nodes"]:
-            try:
+    while total < 100000:
+        try:
+            response = requests.post(
+                GITHUB_API,
+                json=build_query(cursor_token),
+                headers=HEADERS
+            )
+
+            if response.status_code != 200:
+                print(f"[{response.status_code}] Retrying after 60 seconds...")
+                time.sleep(60)
+                continue
+
+            data = response.json()["data"]["search"]
+
+            for repo in data["nodes"]:
+                repo_id = repo["id"]
+                if repo_id in seen_repo_ids:
+                    continue
+
+                seen_repo_ids.add(repo_id)
+
                 cursor.execute("""
                     INSERT INTO repositories (repo_id, name, owner, stars)
                     VALUES (%s, %s, %s, %s)
                     ON CONFLICT (repo_id) DO NOTHING
-                """, (repo["id"], repo["name"], repo["owner"]["login"], repo["stargazerCount"]))
+                """, (repo_id, repo["name"], repo["owner"]["login"], repo["stargazerCount"]))
+
                 total += 1
-            except Exception as e:
-                print("Insert error:", e)
+                if total % 100 == 0:
+                    print(f"Inserted {total} repositories")
 
-        conn.commit()
-        if not data["pageInfo"]["hasNextPage"]:
-            break
+            conn.commit()
 
-        cursor_token = data["pageInfo"]["endCursor"]
-        print("Fetched so far:", total)
+            if not data["pageInfo"]["hasNextPage"]:
+                print("No more pages available.")
+                break
+
+            cursor_token = data["pageInfo"]["endCursor"]
+            time.sleep(1)
+
+        except Exception as e:
+            print(f"Error occurred: {e}")
+            time.sleep(30)
+
+    print(f"Completed crawling. Total repositories inserted: {total}")
 
 if __name__ == "__main__":
     crawl()
