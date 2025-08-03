@@ -21,11 +21,11 @@ conn = psycopg2.connect(
 )
 cursor = conn.cursor()
 
-def build_query(cursor_token=None):
+def build_query(cursor_token=None, query_str="stars:>100"):
     return {
         "query": """
-        query($cursor: String) {
-          search(query: "stars:>100", type: REPOSITORY, first: 100, after: $cursor) {
+        query($cursor: String, $query: String!) {
+          search(query: $query, type: REPOSITORY, first: 100, after: $cursor) {
             pageInfo {
               hasNextPage
               endCursor
@@ -41,24 +41,26 @@ def build_query(cursor_token=None):
           }
         }
         """,
-        "variables": {"cursor": cursor_token}
+        "variables": {"cursor": cursor_token, "query": query_str}
     }
 
 def crawl():
-    cursor_token = None
     total = 0
+    star_ranges = [(i, i + 100) for i in range(100, 100000, 100)]
     seen_repo_ids = set()
 
-    while total < 100000:
-        try:
+    for min_star, max_star in star_ranges:
+        cursor_token = None
+        while True:
+            query = f"stars:{min_star}..{max_star}"
             response = requests.post(
                 GITHUB_API,
-                json=build_query(cursor_token),
+                json=build_query(cursor_token, query),
                 headers=HEADERS
             )
 
             if response.status_code != 200:
-                print(f"[{response.status_code}] Retrying after 60 seconds...")
+                print(f"[{response.status_code}] Waiting 60s...")
                 time.sleep(60)
                 continue
 
@@ -76,25 +78,23 @@ def crawl():
                     VALUES (%s, %s, %s, %s)
                     ON CONFLICT (repo_id) DO NOTHING
                 """, (repo_id, repo["name"], repo["owner"]["login"], repo["stargazerCount"]))
-
                 total += 1
+
                 if total % 100 == 0:
                     print(f"Inserted {total} repositories")
 
             conn.commit()
 
             if not data["pageInfo"]["hasNextPage"]:
-                print("No more pages available.")
                 break
 
             cursor_token = data["pageInfo"]["endCursor"]
             time.sleep(1)
 
-        except Exception as e:
-            print(f"Error occurred: {e}")
-            time.sleep(30)
+        if total >= 100000:
+            break
 
-    print(f"Completed crawling. Total repositories inserted: {total}")
+    print(f"Done. Total repositories inserted: {total}")
 
 if __name__ == "__main__":
     crawl()
