@@ -51,8 +51,7 @@ jobs:
           PGPASSWORD=password psql -h localhost -U postgres -d github -c "\COPY repositories TO 'repos.csv' CSV HEADER"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@4
-
+        uses: actions/upload-artifact@v4
         with:
           name: github-repo-stars
           path: repos.csv
