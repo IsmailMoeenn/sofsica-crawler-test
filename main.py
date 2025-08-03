@@ -3,15 +3,15 @@ import requests
 import psycopg2
 import time
 
-# Get token from GitHub Actions securely
+# Get GitHub token from environment
 TOKEN = os.environ.get("GITHUB_TOKEN")
 if not TOKEN:
-    raise Exception("GITHUB_TOKEN not found in environment!")
+    raise Exception("GITHUB_TOKEN not found!")
 
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 GITHUB_API = "https://api.github.com/graphql"
 
-# Connect to PostgreSQL
+# PostgreSQL connection
 conn = psycopg2.connect(
     host="localhost",
     database="github",
@@ -46,50 +46,61 @@ def build_query(cursor_token=None, query_str="stars:>100"):
 
 def crawl():
     total = 0
-    star_ranges = [(i, i + 100) for i in range(100, 100000, 100)]
-    seen_repo_ids = set()
+    batch = []
+    BATCH_SIZE = 100
+    star_ranges = [(i, i + 200) for i in range(100, 200000, 200)]  # Bigger ranges = faster
 
     for min_star, max_star in star_ranges:
         cursor_token = None
         while True:
             query = f"stars:{min_star}..{max_star}"
-            response = requests.post(
-                GITHUB_API,
-                json=build_query(cursor_token, query),
-                headers=HEADERS
-            )
+            for attempt in range(5):  # Retry mechanism
+                response = requests.post(
+                    GITHUB_API,
+                    json=build_query(cursor_token, query),
+                    headers=HEADERS
+                )
+                if response.status_code == 200:
+                    break
+                else:
+                    print(f"[{response.status_code}] Waiting 60s before retry...")
+                    time.sleep(60)
+            else:
+                print("Failed after 5 attempts, skipping this range.")
+                break
 
-            if response.status_code != 200:
-                print(f"[{response.status_code}] Waiting 60s...")
-                time.sleep(60)
-                continue
-
-            data = response.json()["data"]["search"]
-
-            for repo in data["nodes"]:
-                repo_id = repo["id"]
-                if repo_id in seen_repo_ids:
-                    continue
-
-                seen_repo_ids.add(repo_id)
-
-                cursor.execute("""
-                    INSERT INTO repositories (repo_id, name, owner, stars)
-                    VALUES (%s, %s, %s, %s)
-                    ON CONFLICT (repo_id) DO NOTHING
-                """, (repo_id, repo["name"], repo["owner"]["login"], repo["stargazerCount"]))
+            search_data = response.json().get("data", {}).get("search", {})
+            repos = search_data.get("nodes", [])
+            for repo in repos:
+                batch.append((
+                    repo["id"],
+                    repo["name"],
+                    repo["owner"]["login"],
+                    repo["stargazerCount"]
+                ))
                 total += 1
 
                 if total % 100 == 0:
                     print(f"Inserted {total} repositories")
 
-            conn.commit()
+            if batch:
+                try:
+                    cursor.executemany("""
+                        INSERT INTO repositories (repo_id, name, owner, stars)
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (repo_id) DO NOTHING
+                    """, batch)
+                    conn.commit()
+                    batch.clear()
+                except Exception as e:
+                    print("DB insert failed:", e)
+                    conn.rollback()
 
-            if not data["pageInfo"]["hasNextPage"]:
+            if not search_data.get("pageInfo", {}).get("hasNextPage"):
                 break
 
-            cursor_token = data["pageInfo"]["endCursor"]
-            time.sleep(1)
+            cursor_token = search_data["pageInfo"]["endCursor"]
+            time.sleep(0.5)  # Reduce delay to speed up crawl
 
         if total >= 100000:
             break
